@@ -3,7 +3,7 @@
 Proyecto académico desarrollado por:
 - Ernesto
 - Saúl David 
-- José José
+- José Joel
 - Luis David
 
 ## Funciones
