@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+import uuid
 
 # ============================================================
 # ENCUESTA DE SATISFACCIÓN - BILLAR
@@ -23,7 +24,8 @@ ASPECTOS = [
     "Precios"
 ]
 
-COLUMNAS = ["Fecha y hora"] + ASPECTOS + ["Opinión"]
+# Se agrega un ID para identificar cada envío
+COLUMNAS = ["ID", "Fecha y hora"] + ASPECTOS + ["Opinión"]
 
 
 # ============================================================
@@ -44,6 +46,14 @@ st.markdown("""
         color: #777;
         margin-bottom: 25px;
     }
+
+    .confirmacion {
+        padding: 20px;
+        border-radius: 12px;
+        text-align: center;
+        background-color: rgba(0, 180, 80, 0.12);
+        margin: 15px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,12 +63,9 @@ st.markdown("""
 # ============================================================
 
 def crear_archivo():
-    """Crea el archivo CSV si no existe."""
-    
+    """Crea el CSV si no existe."""
     if not ARCHIVO.exists():
-        pd.DataFrame(
-            columns=COLUMNAS
-        ).to_csv(
+        pd.DataFrame(columns=COLUMNAS).to_csv(
             ARCHIVO,
             index=False,
             encoding="utf-8-sig"
@@ -67,23 +74,42 @@ def crear_archivo():
 
 def cargar_datos():
     """Lee las encuestas guardadas."""
-    
     crear_archivo()
 
     try:
-        return pd.read_csv(
+        df = pd.read_csv(
             ARCHIVO,
             encoding="utf-8-sig"
         )
+
+        # Compatibilidad con un CSV anterior que no tenía ID
+        if "ID" not in df.columns:
+            df.insert(0, "ID", [
+                str(uuid.uuid4()) for _ in range(len(df))
+            ])
+            df.to_csv(
+                ARCHIVO,
+                index=False,
+                encoding="utf-8-sig"
+            )
+
+        return df
 
     except (pd.errors.EmptyDataError, FileNotFoundError):
         return pd.DataFrame(columns=COLUMNAS)
 
 
-def guardar_encuesta(calificaciones, opinion):
-    """Guarda una nueva encuesta."""
-    
+def guardar_encuesta(calificaciones, opinion, envio_id):
+    """Guarda una encuesta solamente una vez."""
+    df = cargar_datos()
+
+    # Protección contra un envío duplicado
+    if not df.empty and "ID" in df.columns:
+        if envio_id in df["ID"].astype(str).values:
+            return False
+
     datos = {
+        "ID": envio_id,
         "Fecha y hora": datetime.now().strftime(
             "%d/%m/%Y %H:%M"
         ),
@@ -91,13 +117,10 @@ def guardar_encuesta(calificaciones, opinion):
         "Opinión": opinion.strip()
     }
 
-    df = cargar_datos()
+    nueva = pd.DataFrame([datos])
 
     df = pd.concat(
-        [
-            df,
-            pd.DataFrame([datos])
-        ],
+        [df, nueva],
         ignore_index=True
     )
 
@@ -107,10 +130,11 @@ def guardar_encuesta(calificaciones, opinion):
         encoding="utf-8-sig"
     )
 
+    return True
+
 
 def estrellas(valor):
     """Convierte un número en estrellas."""
-
     if valor is None:
         return "Selecciona una calificación"
 
@@ -120,8 +144,7 @@ def estrellas(valor):
 
 
 def generar_opinion_general(promedios):
-    """Genera una opinión general automáticamente."""
-
+    """Genera una opinión general automática."""
     promedio_general = promedios.mean()
 
     mejor = promedios.idxmax()
@@ -129,13 +152,10 @@ def generar_opinion_general(promedios):
 
     if promedio_general >= 4.5:
         nivel = "excelente"
-
     elif promedio_general >= 4:
         nivel = "muy positiva"
-
     elif promedio_general >= 3:
         nivel = "regular"
-
     else:
         nivel = "baja"
 
@@ -146,9 +166,18 @@ def generar_opinion_general(promedios):
         f"{promedios[mejor]:.2f} estrellas. "
         f"El aspecto con menor calificación es {peor}, con "
         f"{promedios[peor]:.2f} estrellas, por lo que "
-        f"representa el principal punto de oportunidad "
-        f"para mejorar."
+        f"representa el principal punto de oportunidad para mejorar."
     )
+
+
+def limpiar_encuesta():
+    """Prepara la aplicación para una nueva encuesta."""
+    for aspecto in ASPECTOS:
+        st.session_state.pop(f"cal_{aspecto}", None)
+
+    st.session_state.pop("opinion", None)
+    st.session_state.submitted = False
+    st.session_state.envio_id = str(uuid.uuid4())
 
 
 # ============================================================
@@ -156,6 +185,12 @@ def generar_opinion_general(promedios):
 # ============================================================
 
 crear_archivo()
+
+if "submitted" not in st.session_state:
+    st.session_state.submitted = False
+
+if "envio_id" not in st.session_state:
+    st.session_state.envio_id = str(uuid.uuid4())
 
 
 # ============================================================
@@ -180,10 +215,7 @@ st.markdown(
 # ============================================================
 
 tab_encuesta, tab_resultados = st.tabs(
-    [
-        "📝 Encuesta",
-        "📊 Resultados"
-    ]
+    ["📝 Encuesta", "📊 Resultados"]
 )
 
 
@@ -193,105 +225,133 @@ tab_encuesta, tab_resultados = st.tabs(
 
 with tab_encuesta:
 
-    st.subheader("Califica tu experiencia")
+    # --------------------------------------------------------
+    # SI YA FUE ENVIADA
+    # --------------------------------------------------------
 
-    st.write(
-        "Selecciona de 1 a 5 estrellas en cada aspecto."
-    )
+    if st.session_state.submitted:
 
-    with st.form("formulario_encuesta"):
-
-        calificaciones = {}
-
-        for aspecto in ASPECTOS:
-
-            calificaciones[aspecto] = st.radio(
-                f"**{aspecto}**",
-
-                options=[1, 2, 3, 4, 5],
-
-                # IMPORTANTE:
-                # Ninguna opción aparece seleccionada
-                index=None,
-
-                horizontal=True,
-
-                format_func=estrellas,
-
-                key=f"cal_{aspecto}"
-            )
-
-        st.markdown("### 💬 Tu opinión")
-
-        opinion = st.text_area(
-            "¿Qué te pareció el billar?",
-
-            placeholder=(
-                "Escribe aquí algún comentario, "
-                "sugerencia o experiencia..."
-            ),
-
-            max_chars=500
+        st.markdown(
+            """
+            <div class="confirmacion">
+                <h2>✅ ¡Encuesta enviada!</h2>
+                <p>
+                    Tu evaluación ya fue registrada correctamente.
+                </p>
+                <p>
+                    <strong>
+                    No necesitas volver a presionar ningún botón.
+                    </strong>
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
-        enviar = st.form_submit_button(
-            "⭐ Enviar evaluación",
+        st.info(
+            "Si otra persona quiere contestar la encuesta "
+            "desde este mismo dispositivo, presiona "
+            "«Nueva encuesta»."
+        )
+
+        if st.button(
+            "📝 Nueva encuesta",
             use_container_width=True
+        ):
+            limpiar_encuesta()
+            st.rerun()
+
+    # --------------------------------------------------------
+    # FORMULARIO
+    # --------------------------------------------------------
+
+    else:
+
+        st.subheader("Califica tu experiencia")
+
+        st.write(
+            "Selecciona de 1 a 5 estrellas en cada aspecto."
         )
 
+        with st.form("formulario_encuesta"):
 
-    # ========================================================
-    # VALIDAR ENCUESTA
-    # ========================================================
+            calificaciones = {}
 
-    if enviar:
-
-        faltantes = [
-            aspecto
-
-            for aspecto, calificacion
-            in calificaciones.items()
-
-            if calificacion is None
-        ]
-
-
-        # Si falta alguna calificación
-        if faltantes:
-
-            st.error(
-                "Por favor, califica todos los aspectos "
-                "antes de enviar la encuesta."
-            )
-
-            st.write(
-                "Falta calificar: "
-                + ", ".join(faltantes)
-            )
-
-
-        # Si todo está contestado
-        else:
-
-            guardar_encuesta(
-                calificaciones,
-                opinion
-            )
-
-            st.success(
-                "¡Gracias por evaluar nuestro billar! "
-                "Tu respuesta fue registrada correctamente."
-            )
-
-            # Limpiar las calificaciones
             for aspecto in ASPECTOS:
 
-                st.session_state.pop(
-                    f"cal_{aspecto}",
-                    None
+                calificaciones[aspecto] = st.radio(
+                    f"**{aspecto}**",
+                    options=[1, 2, 3, 4, 5],
+                    index=None,
+                    horizontal=True,
+                    format_func=estrellas,
+                    key=f"cal_{aspecto}"
                 )
 
-            st.rerun()
+            st.markdown("### 💬 Tu opinión")
+
+            opinion = st.text_area(
+                "¿Qué te pareció el billar?",
+                placeholder=(
+                    "Escribe aquí algún comentario, "
+                    "sugerencia o experiencia..."
+                ),
+                max_chars=500,
+                key="opinion"
+            )
+
+            enviar = st.form_submit_button(
+                "⭐ ENVIAR EVALUACIÓN",
+                use_container_width=True
+            )
+
+        # ----------------------------------------------------
+        # VALIDACIÓN
+        # ----------------------------------------------------
+
+        if enviar:
+
+            faltantes = [
+                aspecto
+                for aspecto, calificacion
+                in calificaciones.items()
+                if calificacion is None
+            ]
+
+            if faltantes:
+
+                st.error(
+                    "Por favor, califica todos los aspectos "
+                    "antes de enviar la encuesta."
+                )
+
+                st.write(
+                    "Falta calificar: "
+                    + ", ".join(faltantes)
+                )
+
+            else:
+
+                # El mismo ID se utiliza durante esta encuesta.
+                # Si se intenta repetir el envío, la función
+                # detectará que ese ID ya existe.
+                guardada = guardar_encuesta(
+                    calificaciones,
+                    opinion,
+                    st.session_state.envio_id
+                )
+
+                if guardada:
+
+                    st.session_state.submitted = True
+
+                    st.rerun()
+
+                else:
+
+                    st.session_state.submitted = True
+
+                    st.rerun()
 
 
 # ============================================================
@@ -302,7 +362,6 @@ with tab_resultados:
 
     df = cargar_datos()
 
-
     if df.empty:
 
         st.info(
@@ -311,10 +370,7 @@ with tab_resultados:
             "aquí aparecerán los resultados."
         )
 
-
     else:
-
-        # Convertir las calificaciones a números
 
         for aspecto in ASPECTOS:
 
@@ -323,105 +379,69 @@ with tab_resultados:
                 errors="coerce"
             )
 
-
-        # ====================================================
-        # PROMEDIOS
-        # ====================================================
-
         promedios = df[ASPECTOS].mean()
-
         promedio_general = promedios.mean()
-
         cantidad = len(df)
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # INDICADORES
-        # ====================================================
+        # ----------------------------------------------------
 
         col1, col2, col3 = st.columns(3)
 
-
         with col1:
-
             st.metric(
                 "Encuestas",
                 cantidad
             )
 
-
         with col2:
-
             st.metric(
                 "Promedio general",
                 f"{promedio_general:.2f} ⭐"
             )
 
-
         with col3:
-
             st.metric(
                 "Mejor aspecto",
                 promedios.idxmax()
             )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # TABLA
-        # ====================================================
+        # ----------------------------------------------------
 
         st.divider()
 
-        st.subheader(
-            "⭐ Promedio por aspecto"
-        )
-
+        st.subheader("⭐ Promedio por aspecto")
 
         tabla = pd.DataFrame({
-
             "Aspecto": ASPECTOS,
-
             "Promedio": [
-                round(
-                    promedios[aspecto],
-                    2
-                )
-
+                round(promedios[aspecto], 2)
                 for aspecto in ASPECTOS
             ],
-
             "Calificación": [
-                estrellas(
-                    promedios[aspecto]
-                )
-
+                estrellas(promedios[aspecto])
                 for aspecto in ASPECTOS
             ]
         })
 
-
         st.dataframe(
             tabla,
-
             hide_index=True,
-
             use_container_width=True
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # GRÁFICA
-        # ====================================================
+        # ----------------------------------------------------
 
-        st.subheader(
-            "📊 Gráfica de calificaciones"
-        )
-
+        st.subheader("📊 Gráfica de calificaciones")
 
         grafica = pd.DataFrame({
             "Promedio": promedios
         })
-
 
         st.bar_chart(
             grafica,
@@ -431,31 +451,21 @@ with tab_resultados:
             y_label="Aspecto"
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # OPINIÓN GENERAL
-        # ====================================================
+        # ----------------------------------------------------
 
-        st.subheader(
-            "🧠 Opinión general"
-        )
-
+        st.subheader("🧠 Opinión general")
 
         st.info(
-            generar_opinion_general(
-                promedios
-            )
+            generar_opinion_general(promedios)
         )
 
+        # ----------------------------------------------------
+        # OPINIONES
+        # ----------------------------------------------------
 
-        # ====================================================
-        # OPINIONES DE CLIENTES
-        # ====================================================
-
-        st.subheader(
-            "💬 Opiniones de los clientes"
-        )
-
+        st.subheader("💬 Opiniones de los clientes")
 
         opiniones = (
             df["Opinión"]
@@ -463,18 +473,15 @@ with tab_resultados:
             .astype(str)
         )
 
-
         opiniones = opiniones[
             opiniones.str.strip() != ""
         ]
-
 
         if opiniones.empty:
 
             st.write(
                 "Todavía no hay opiniones escritas."
             )
-
 
         else:
 
@@ -484,55 +491,40 @@ with tab_resultados:
             ):
 
                 st.markdown(
-                    f"**Cliente {numero}:** "
-                    f"{comentario}"
+                    f"**Cliente {numero}:** {comentario}"
                 )
 
-
-        # ====================================================
-        # DESCARGAR RESULTADOS
-        # ====================================================
+        # ----------------------------------------------------
+        # DESCARGAR
+        # ----------------------------------------------------
 
         st.divider()
 
-        st.subheader(
-            "📥 Exportar resultados"
-        )
-
+        st.subheader("📥 Exportar resultados")
 
         csv = df.to_csv(
             index=False,
             encoding="utf-8-sig"
         )
 
-
         st.download_button(
             label="Descargar encuestas en CSV",
-
             data=csv,
-
             file_name="encuestas_billar.csv",
-
             mime="text/csv",
-
             use_container_width=True
         )
 
-
-        # ====================================================
+        # ----------------------------------------------------
         # ADMINISTRACIÓN
-        # ====================================================
+        # ----------------------------------------------------
 
-        with st.expander(
-            "⚙️ Administración"
-        ):
+        with st.expander("⚙️ Administración"):
 
             st.warning(
-                "Esta sección es para el responsable "
-                "del proyecto. Borrar los datos es "
-                "una acción permanente."
+                "Esta sección es para el responsable del proyecto. "
+                "Borrar los datos es una acción permanente."
             )
-
 
             if st.button(
                 "🗑️ Borrar todas las encuestas"
