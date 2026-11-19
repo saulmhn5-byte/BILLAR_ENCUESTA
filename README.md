@@ -1,10 +1,10 @@
 # 🎱 Encuesta de satisfacción para un billar
 
 Proyecto académico desarrollado por:
-- Ernesto
-- Saúl David 
-- José Joel
-- Luis David
+- Ernesto Álvarez Cruz 
+- Saúl David Montes de Oca Santana 
+- José Joel Hernández Cruz 
+- Luis David Zapata Torres 
 
 ## Funciones
 
